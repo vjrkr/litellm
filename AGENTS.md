@@ -1,3 +1,5 @@
+For database operations, connection ownership and proxy dependency wiring, follow [database-access](.agents/skills/database-access/SKILL.md)
+
 Do not write comments unless they are any of:
 - absolutely necessary to explain some very complex business logic (in which case, keep it concise and clear)
 - used as an input for tools to read and act on. For example:

@@ -5,6 +5,7 @@ Repository classes for database operations.
 from litellm.repositories.autorouter_session_repository import AutoRouterSessionRepository
 from litellm.repositories.budget_repository import BudgetRepository
 from litellm.repositories.config_repository import ConfigRepository
+from litellm.repositories.container import Repositories
 from litellm.repositories.credentials_repository import CredentialsRepository
 from litellm.repositories.managed_file_repository import ManagedFileRepository
 from litellm.repositories.model_repository import ModelRepository
@@ -141,6 +142,7 @@ __all__ = [
     "ProjectRepository",
     "PromptRepository",
     "ReadOnlyTable",
+    "Repositories",
     "SSOConfigRepository",
     "SearchToolsRepository",
     "SkillsRepository",
