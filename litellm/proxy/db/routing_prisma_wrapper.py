@@ -233,8 +233,10 @@ class RoutingPrismaWrapper:
         await self._reader.start_token_refresh_task()
 
     async def stop_token_refresh_task(self) -> None:
-        await self._writer.stop_token_refresh_task()
-        await self._reader.stop_token_refresh_task()
+        try:
+            await self._writer.stop_token_refresh_task()
+        finally:
+            await self._reader.stop_token_refresh_task()
 
     async def recreate_prisma_client(
         self,

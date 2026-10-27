@@ -254,6 +254,21 @@ def test_token_refresh_delegates_to_both_writer_and_reader():
     reader.stop_token_refresh_task.assert_awaited_once()
 
 
+def test_reader_token_refresh_stops_even_when_the_writer_task_failed() -> None:
+    from litellm.proxy.db.routing_prisma_wrapper import RoutingPrismaWrapper
+
+    writer: Final = MagicMock()
+    reader: Final = MagicMock()
+    writer.stop_token_refresh_task = AsyncMock(side_effect=RuntimeError("refresh failed"))
+    reader.stop_token_refresh_task = AsyncMock()
+    routing: Final = RoutingPrismaWrapper(writer=writer, reader=reader)
+
+    with pytest.raises(RuntimeError, match="refresh failed"):
+        asyncio.run(routing.stop_token_refresh_task())
+
+    reader.stop_token_refresh_task.assert_awaited_once()
+
+
 def test_routed_actions_falls_back_to_writer_for_unknown_methods():
     from litellm.proxy.db.routing_prisma_wrapper import _RoutedActions
 

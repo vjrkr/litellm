@@ -14,12 +14,61 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any
+from typing import Any, Final
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from litellm.proxy.utils import PrismaClient
+
+
+@pytest.mark.asyncio
+async def test_shutdown_rejects_a_reconnect_already_waiting_for_the_lock(prisma_client: PrismaClient) -> None:
+    await prisma_client._db_reconnect_lock.acquire()
+    reconnect: Final = asyncio.create_task(prisma_client.attempt_db_reconnect(reason="engine_process_death", force=True))
+    await asyncio.sleep(0)
+    closing: Final = asyncio.create_task(prisma_client.stop_background_tasks())
+    await asyncio.sleep(0)
+    prisma_client._db_reconnect_lock.release()
+
+    await asyncio.wait_for(closing, timeout=2)
+    assert await reconnect is False
+    assert await prisma_client.attempt_db_reconnect(reason="engine_process_death", force=True) is False
+    prisma_client.db.connect.assert_not_awaited()
+    prisma_client.db.disconnect.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_shutdown_waits_for_spawned_engine_work_and_prevents_rearming(prisma_client: PrismaClient) -> None:
+    running: Final = asyncio.Event()
+    cancelled: Final = asyncio.Event()
+    released: Final = asyncio.Event()
+    finished: Final = asyncio.Event()
+
+    async def engine_work() -> None:
+        running.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancelled.set()
+            await released.wait()
+            finished.set()
+
+    prisma_client._spawn_engine_task(engine_work())
+    await asyncio.wait_for(running.wait(), timeout=2)
+    closing: Final = asyncio.create_task(prisma_client.stop_background_tasks())
+    try:
+        await asyncio.wait_for(cancelled.wait(), timeout=2)
+        assert not finished.is_set()
+        assert not closing.done()
+    finally:
+        released.set()
+        await asyncio.wait_for(closing, timeout=2)
+
+    assert finished.is_set()
+    prisma_client._handle_writer_engine_replaced()
+    await asyncio.sleep(0)
+    assert not prisma_client._engine_tasks
 
 _PROBE_SQL = "SELECT to_regclass($1) IS NOT NULL AS present"
 

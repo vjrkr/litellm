@@ -168,6 +168,7 @@ from litellm.proxy.common_utils.token_count_settings import (
 )
 from litellm.proxy.management_helpers.auto_router_availability import AutoRouterCatalogEntry, build_auto_router_catalog
 from litellm.proxy.management_helpers.model_group_custom_fields import model_group_custom_fields
+from litellm.repositories import database as database_runtime
 from litellm.router_utils.access_windows import access_windows_config_error
 from litellm.router_utils.add_retry_fallback_headers import (
     get_fallback_errors_from_headers,
@@ -1288,13 +1289,7 @@ async def proxy_shutdown_event(worker_heartbeat: ProxyWorkerHeartbeat | None = N
     if worker_heartbeat is not None and prisma_client:
         await worker_heartbeat.deregister()
     if prisma_client:
-        # Drain the SGR fold first: it lives in memory, so an un-drained interval
-        # is lost, and a write attempted after disconnect raises
-        # ClientNotConnectedError rather than persisting anything. Ordering this
-        # inside the same guard is what keeps the two from drifting apart.
         await asyncio.gather(_drain_audit_tasks_on_shutdown(), _flush_request_accumulators(prisma_client))
-        verbose_proxy_logger.debug("Disconnecting from Prisma")
-        await prisma_client.disconnect()
     else:
         await _drain_audit_tasks_on_shutdown()
 
@@ -1417,16 +1412,29 @@ async def initialize_shared_aiohttp_session() -> "ClientSession | None":
 _initialize_shared_aiohttp_session: Final = initialize_shared_aiohttp_session
 
 
-async def _connect_to_count_stored_values() -> SupportsRawQueries:
+async def _connect_to_count_stored_values(resources: AsyncExitStack) -> SupportsRawQueries:
     client: Final = prisma_client or PrismaClient(
         database_url=str(get_secret("DATABASE_URL")), proxy_logging_obj=proxy_logging_obj
     )
+    if prisma_client is None:
+        await resources.enter_async_context(database_runtime.lifespan(database_runtime.Database(prisma=client)))
     await client.connect()
     return client.writer_db
 
 
+def _forget_prisma_client() -> None:
+    global prisma_client  # noqa: PLW0603  # routes still read this global until they move to DatabaseDependency
+    prisma_client = None  # rebind-ok: a closed client must not survive into the next lifespan entry
+
+
 @asynccontextmanager
 async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[ProxyLifespanState, None]:
+    async with AsyncExitStack() as resources, _proxy_lifespan(app, resources) as state:
+        yield state
+
+
+@asynccontextmanager
+async def _proxy_lifespan(app: FastAPI, resources: AsyncExitStack) -> AsyncGenerator[ProxyLifespanState, None]:
     global \
         prisma_client, \
         master_key, \
@@ -1444,6 +1452,11 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[ProxyLifespanState
         proxy_batch_polling_interval, \
         shared_aiohttp_session
     import json
+
+    resources.callback(_forget_prisma_client)
+    existing_database: Final = await resources.enter_async_context(
+        database_runtime.lifespan(None if prisma_client is None else database_runtime.Database(prisma=prisma_client))
+    )
 
     init_verbose_loggers()
 
@@ -1523,21 +1536,24 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[ProxyLifespanState
             if decoded_worker_config is not None:
                 await initialize_from_worker_config(decoded_worker_config)
 
-    enforce_master_key_boot_verdict(
-        await with_stored_secrets_counted(
-            master_key_boot_verdict(
-                master_key=master_key,
-                environment_master_key=os.getenv(MASTER_KEY_ENV_VAR),
-                general_settings=general_settings,
-                config_file_path=user_config_file_path,
-                override_env_is_on=get_secret_bool(WEAK_OR_UNSET_MASTER_KEY_OVERRIDE_ENV_VAR) is True,
-                salt_key_is_set=os.getenv(SALT_KEY_ENV_VAR) is not None,
-                database_is_configured=prisma_client is not None or get_secret("DATABASE_URL", None) is not None,
+    async with AsyncExitStack() as boot_database:
+        enforce_master_key_boot_verdict(
+            await with_stored_secrets_counted(
+                master_key_boot_verdict(
+                    master_key=master_key,
+                    environment_master_key=os.getenv(MASTER_KEY_ENV_VAR),
+                    general_settings=general_settings,
+                    config_file_path=user_config_file_path,
+                    override_env_is_on=get_secret_bool(WEAK_OR_UNSET_MASTER_KEY_OVERRIDE_ENV_VAR) is True,
+                    salt_key_is_set=os.getenv(SALT_KEY_ENV_VAR) is not None,
+                    database_is_configured=prisma_client is not None or get_secret("DATABASE_URL", None) is not None,
+                ),
+                count_values_encrypted_with=partial(
+                    count_values_encrypted_with_or_none, partial(_connect_to_count_stored_values, boot_database)
+                ),
             ),
-            count_values_encrypted_with=partial(count_values_encrypted_with_or_none, _connect_to_count_stored_values),
-        ),
-        announce=announce_on_stderr_at_exit,
-    )
+            announce=announce_on_stderr_at_exit,
+        )
 
     # check if DATABASE_URL in environment - load from there
     if prisma_client is None:
@@ -1550,6 +1566,10 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[ProxyLifespanState
             )
         )
 
+    database: Final = existing_database or await resources.enter_async_context(
+        database_runtime.lifespan(None if prisma_client is None else database_runtime.Database(prisma=prisma_client))
+    )
+
     await migrate_if_requested(
         environ=os.environ,
         master_key=master_key,
@@ -1559,15 +1579,16 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[ProxyLifespanState
     )
 
     if prisma_client is not None:
+        startup_prisma: Final = prisma_client
 
-        async def _run_pw_migration():
+        async def _run_pw_migration() -> None:
             try:
-                result: Final = await migrate_passwords_to_scrypt_async(prisma_client)
+                result: Final = await migrate_passwords_to_scrypt_async(startup_prisma)
                 verbose_proxy_logger.info("Password migration: %s", result)
             except Exception as e:
                 verbose_proxy_logger.warning("Password migration skipped: %s", e)
 
-        asyncio.create_task(_run_pw_migration())
+        await resources.enter_async_context(database_runtime.background_task(_run_pw_migration()))
 
         async def _run_agent_grant_id_migration() -> None:
             from litellm.proxy.agent_endpoints.agent_registry import (
@@ -1578,7 +1599,7 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[ProxyLifespanState
             for attempt in range(3):
                 try:
                     result = await global_agent_registry.migrate_legacy_grant_ids(
-                        table=object_permission_table(prisma_client)
+                        table=object_permission_table(startup_prisma)
                     )
                     if result.rewritten:
                         verbose_proxy_logger.info(
@@ -1598,7 +1619,7 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[ProxyLifespanState
                 if attempt < 2:
                     await asyncio.sleep(5)
 
-        asyncio.create_task(_run_agent_grant_id_migration())
+        await resources.enter_async_context(database_runtime.background_task(_run_agent_grant_id_migration()))
 
     ## A coordination_redis block saved from the admin UI lives in the database,
     ## which is only reachable once the prisma client exists. Apply it here, before
@@ -1784,7 +1805,7 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[ProxyLifespanState
         enabled=tracing_enabled,
         settings=tracing_settings,
     ) as receiver:
-        state: Final[ProxyLifespanState] = {"tracing_receiver": receiver}
+        state: Final[ProxyLifespanState] = {"tracing_receiver": receiver, "database": database}
         from litellm.proxy.admin_mcp import admin_mcp_lifespan
 
         telemetry_settings: Final = load_telemetry_settings()
@@ -1837,30 +1858,6 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[ProxyLifespanState
                     verbose_proxy_logger.info("SESSION REUSE: Closed shared aiohttp session")
                 except Exception as e:
                     verbose_proxy_logger.error("Error closing shared aiohttp session: %s", e)
-
-            # Shutdown event - stop RDS IAM token refresh background task
-            if (
-                prisma_client is not None
-                and hasattr(prisma_client, "db")
-                and hasattr(prisma_client.db, "stop_token_refresh_task")
-            ):
-                try:
-                    await prisma_client.db.stop_token_refresh_task()
-                except Exception as e:
-                    verbose_proxy_logger.error("Error stopping token refresh task: %s", e)
-
-            # Shutdown event - stop Prisma DB health watchdog task
-            if prisma_client is not None and hasattr(prisma_client, "stop_db_health_watchdog_task"):
-                try:
-                    await prisma_client.stop_db_health_watchdog_task()
-                except Exception as e:
-                    verbose_proxy_logger.error("Error stopping DB health watchdog task: %s", e)
-
-            if prisma_client is not None and hasattr(prisma_client, "stop_view_setup_task"):
-                try:
-                    await prisma_client.stop_view_setup_task()
-                except Exception as e:
-                    verbose_proxy_logger.error("Error stopping the spend view setup task: %s", e)
 
             await _drain_spend_event_producer_on_shutdown()
             if telemetry_start is not None:
@@ -12041,17 +12038,20 @@ class ProxyStartupEvent:
         proxy_logging_obj: ProxyLogging,
         user_api_key_cache: UserApiKeyCache,
     ) -> PrismaClient | None:
-        """
-        - Sets up prisma client
-        - Adds necessary views to proxy
-        """
+        if database_url is None:
+            return None
+        client: Final = PrismaClient(database_url=database_url, proxy_logging_obj=proxy_logging_obj)
+        async with AsyncExitStack() as setup_resources:
+            setup_resources.push_async_callback(database_runtime.Database(prisma=client).aclose)
+            connected: Final = await cls._initialize_prisma_client(client)
+            if connected is not None:
+                setup_resources.pop_all()
+            return connected
+
+    @staticmethod
+    async def _initialize_prisma_client(prisma_client: PrismaClient) -> PrismaClient | None:
         connected_client: PrismaClient | None = None
         try:
-            if database_url is None:
-                return None
-
-            prisma_client = PrismaClient(database_url=database_url, proxy_logging_obj=proxy_logging_obj)
-
             try:
                 await prisma_client.connect()
             except Exception as e:
