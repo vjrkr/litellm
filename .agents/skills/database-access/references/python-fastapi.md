@@ -4,6 +4,7 @@
 
 - `get_database` reads the lifespan-owned handle from request state
 - `get_repositories` builds the shared access point from that handle
+- Choose each feature's replica routing once in `get_repositories`, never at call sites
 - A handler receives `Repositories | None`, then uses `repositories.banners`, never a Prisma client
 - `UserBannerRepository` keeps the existing Prisma table, serialization and configuration-sync behavior
 - The banner audit provider binds the legacy audit callable at request time, without performing audit I/O

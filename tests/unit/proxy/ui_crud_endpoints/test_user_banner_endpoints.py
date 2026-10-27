@@ -14,6 +14,7 @@ from litellm.proxy.proxy_server import app
 from litellm.proxy.ui_crud_endpoints.user_banner_dependencies import get_user_banner_audit
 from litellm.repositories.container import Repositories
 from litellm.repositories.database import Database
+from litellm.repositories.deployment_warning_ignore_repository import DeploymentWarningIgnoreRepository
 from litellm.repositories.user_banner_repository import UserBannerRepository
 from tests._master_key import MASTER_KEY
 
@@ -169,7 +170,10 @@ class TestUpdateUserBanner:
     def test_persists_and_round_trips(self, admin_auth, monkeypatch, mock_audit_log, override_repositories: bool):
         mock_prisma: Final = _mock_prisma(monkeypatch, record=None)
         if override_repositories:
-            repositories: Final = Repositories(banners=UserBannerRepository(mock_prisma))
+            repositories: Final = Repositories(
+                banners=UserBannerRepository(mock_prisma),
+                deployment_warning_ignores=DeploymentWarningIgnoreRepository(mock_prisma),
+            )
             monkeypatch.setitem(app.dependency_overrides, get_database, lambda: None)
             monkeypatch.setitem(app.dependency_overrides, get_repositories, lambda: repositories)
 

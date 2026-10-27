@@ -4,6 +4,7 @@ from fastapi import Depends, Request
 
 from litellm.repositories.container import Repositories
 from litellm.repositories.database import Database
+from litellm.repositories.deployment_warning_ignore_repository import DeploymentWarningIgnoreRepository
 from litellm.repositories.user_banner_repository import UserBannerRepository
 
 _MISSING_DATABASE: Final = object()
@@ -25,7 +26,12 @@ DatabaseDependency: TypeAlias = Annotated[Database | None, Depends(get_database)
 
 
 async def get_repositories(database: DatabaseDependency) -> Repositories | None:
-    return None if database is None else Repositories(banners=UserBannerRepository(database.prisma))
+    if database is None:
+        return None
+    return Repositories(
+        banners=UserBannerRepository(database.prisma),
+        deployment_warning_ignores=DeploymentWarningIgnoreRepository(database.prisma, use_writer=True),
+    )
 
 
 RepositoriesDependency: TypeAlias = Annotated[Repositories | None, Depends(get_repositories)]

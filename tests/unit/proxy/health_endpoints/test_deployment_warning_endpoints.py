@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import Final
+from unittest.mock import MagicMock
 
 import pytest
 from fastapi import FastAPI
@@ -15,6 +16,7 @@ from litellm._logging import verbose_logger
 from litellm.constants import LITELLM_PROXY_ADMIN_NAME
 from litellm.proxy._types import AUDIT_ACTIONS, LitellmTableNames, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.deps import get_repositories
 from litellm.proxy.health_endpoints.deployment_warning_endpoints import (
     WarningCondition,
     config_audit_logger,
@@ -28,6 +30,7 @@ from litellm.proxy.health_endpoints.deployment_warning_endpoints import (
 from litellm.proxy.proxy_server import (
     _dump_redacted_config,  # pyright: ignore[reportPrivateUsage]  # the exact redaction every config audit row goes through
 )
+from litellm.repositories.database import Database
 from litellm.repositories.deployment_warning_ignore_repository import DEPLOYMENT_WARNING_IGNORES_ROW_ID
 
 T0: Final = datetime(2026, 10, 14, 12, 0, tzinfo=timezone.utc)
@@ -233,26 +236,24 @@ class TestCurrentWarningConditions:
 
 
 class TestDeploymentWarningIgnoreStore:
-    def test_no_database_means_no_store(self, monkeypatch):
-        monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
-        assert deployment_warning_ignore_store() is None
+    @pytest.mark.asyncio
+    async def test_no_database_means_no_store(self):
+        assert deployment_warning_ignore_store(await get_repositories(None)) is None
 
     @pytest.mark.asyncio
-    async def test_reads_ignores_from_the_writer_not_a_lagging_replica(self, monkeypatch):
+    async def test_reads_ignores_from_the_writer_not_a_lagging_replica(self):
         def ui_settings_table(row: object) -> SimpleNamespace:
             async def find_unique(where: dict[str, str]) -> object:
                 return row
 
             return SimpleNamespace(litellm_uisettings=SimpleNamespace(find_unique=find_unique))
 
-        fresh = {"detailed_debug": {"ignored_by": "a", "ignored_at": "2026-10-14T12:00:00Z"}}
-        monkeypatch.setattr(
-            "litellm.proxy.proxy_server.prisma_client",
-            SimpleNamespace(
-                db=ui_settings_table(None), writer_db=ui_settings_table(SimpleNamespace(ui_settings=fresh))
-            ),
+        fresh: Final = {"detailed_debug": {"ignored_by": "a", "ignored_at": "2026-10-14T12:00:00Z"}}
+        prisma: Final = MagicMock(
+            db=ui_settings_table(None), writer_db=ui_settings_table(SimpleNamespace(ui_settings=fresh))
         )
-        store = deployment_warning_ignore_store()
+        repositories: Final = await get_repositories(Database(prisma=prisma))
+        store: Final = deployment_warning_ignore_store(repositories)
         assert store is not None
         assert await store.get_raw_ignores() == fresh
 

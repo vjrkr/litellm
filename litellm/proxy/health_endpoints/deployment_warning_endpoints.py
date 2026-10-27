@@ -13,6 +13,7 @@ from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm.constants import LITELLM_PROXY_ADMIN_NAME
 from litellm.proxy._types import AUDIT_ACTIONS, LitellmTableNames, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.deps import RepositoriesDependency
 from litellm.proxy.health_endpoints._health_endpoints import (
     DISABLE_NO_REDIS_WARNING_ENV_VAR,
     env_credential_login_enabled,
@@ -22,7 +23,6 @@ from litellm.proxy.health_endpoints._health_endpoints import (
 )
 from litellm.repositories.deployment_warning_ignore_repository import (
     DEPLOYMENT_WARNING_IGNORES_ROW_ID,
-    DeploymentWarningIgnoreRepository,
 )
 from litellm.types.llms.base import LiteLLMBaseModel
 
@@ -225,12 +225,8 @@ def utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def deployment_warning_ignore_store() -> DeploymentWarningIgnoreStore | None:
-    from litellm.proxy.proxy_server import prisma_client
-
-    if prisma_client is None:
-        return None
-    return DeploymentWarningIgnoreRepository(prisma_client, use_writer=True)
+def deployment_warning_ignore_store(repositories: RepositoriesDependency) -> DeploymentWarningIgnoreStore | None:
+    return None if repositories is None else repositories.deployment_warning_ignores
 
 
 def config_audit_logger() -> ConfigAuditLogger:
