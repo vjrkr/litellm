@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 
 use litellm_model_catalog::{
-    BUNDLED_REGISTRY, Catalog, Error, IntegrityLimits, Located, Mode, Written, fatal,
+    BUNDLED_REGISTRY, Catalog, Error, IntegrityLimits, Located, Mode, Rejects, Written,
 };
 use rstest::{fixture, rstest};
 use serde_json::{Map, Value, json};
@@ -40,12 +40,12 @@ fn written(catalog: &Catalog) -> String {
     serde_json::to_string(&document).unwrap()
 }
 
+fn report(error: &Located) -> String {
+    litellm_error::Report::new(error).to_string()
+}
+
 fn error_text(document: Value) -> Vec<String> {
-    loaded(document)
-        .errors
-        .iter()
-        .map(ToString::to_string)
-        .collect()
+    loaded(document).errors.iter().map(report).collect()
 }
 
 #[rstest]
@@ -113,11 +113,11 @@ fn a_bad_entry_is_reported_by_model_and_key_and_kept_raw() {
         "Worse": {"mode": "chat"}
     }));
     let catalog = parsed.value;
-    let problems: Vec<String> = parsed.errors.iter().map(ToString::to_string).collect();
+    let problems: Vec<String> = parsed.errors.iter().map(report).collect();
     assert_eq!(problems.len(), 3, "{problems:?}");
-    assert!(problems[0].starts_with("Bad.mode: unknown variant `chatt`"));
+    assert!(problems[0].starts_with("Bad.mode: invalid value: unknown variant `chatt`"));
     assert!(problems[1].starts_with("Bad.input_cost_per_token: invalid value"));
-    assert_eq!(problems[2], "Worse.litellm_provider is required");
+    assert_eq!(problems[2], "Worse.litellm_provider: required");
     assert!(catalog.lookup("Good").unwrap().entry.model().is_some());
     assert!(catalog.lookup("Bad").unwrap().entry.model().is_none());
     assert_eq!(catalog.model_count(), 3);
@@ -125,7 +125,7 @@ fn a_bad_entry_is_reported_by_model_and_key_and_kept_raw() {
         parsed
             .errors
             .iter()
-            .find(|error| fatal(&error.error))
+            .find(|error| error.error.rejects() == Rejects::Document)
             .is_none()
     );
 }
@@ -141,15 +141,15 @@ fn a_bad_entry_is_reported_by_model_and_key_and_kept_raw() {
 )]
 #[case::aliases_not_a_list(
     json!({"a": {"litellm_provider": "t", "aliases": "bad"}}),
-    "a.aliases: invalid type: string \"bad\", expected a sequence"
+    "a.aliases: invalid value: invalid type: string \"bad\", expected a sequence"
 )]
 #[case::entry_not_object(
     json!({"a": 1, "valid": {"litellm_provider": "test"}}),
-    "a must be a JSON object"
+    "a: must be a JSON object"
 )]
 #[case::fallback_rules_missing(
     json!({"fallback_generalizations": {}, "a": {"litellm_provider": "t"}}),
-    "fallback_generalizations: missing field `rules`"
+    "fallback_generalizations: invalid value: missing field `rules`"
 )]
 #[case::unknown_timezone(
     json!({"a": {"litellm_provider": "t", "off_peak_pricing": {
@@ -179,12 +179,12 @@ fn escaped_row_paths_and_row_validation_share_the_parse_rules() {
     assert_eq!(
         row_errors
             .iter()
-            .map(|error| (error.path.as_str(), error.to_string()))
+            .map(|error| (error.path.as_str(), report(error)))
             .collect::<Vec<_>>(),
         parsed
             .errors
             .iter()
-            .map(|error| (error.path.as_str(), error.to_string()))
+            .map(|error| (error.path.as_str(), report(error)))
             .collect::<Vec<_>>()
     );
     assert_eq!(row_errors[0].path, "/open~1router~0v1/input_cost_per_token");
@@ -277,12 +277,12 @@ fn bundled_per_row_errors_match_document_errors() {
             Written::Entry(fields) => Catalog::row_errors(key, fields),
             Written::Section(_) => Vec::new(),
         })
-        .map(|error| (error.path.clone(), error.to_string()))
+        .map(|error| (error.path.clone(), report(&error)))
         .collect();
     let document_errors: Vec<_> = parsed
         .errors
         .iter()
-        .map(|error| (error.path.clone(), error.to_string()))
+        .map(|error| (error.path.clone(), report(error)))
         .collect();
 
     assert_eq!(row_errors, document_errors);
@@ -347,7 +347,7 @@ fn integrity_limits_count_canonical_models_not_aliases() {
 #[case::array_root_is_json_error(b"[]", "json")]
 fn malformed_documents_are_rejected_whole(#[case] body: &[u8], #[case] kind: &str) {
     let actual = Catalog::parse(body);
-    assert!(matches!(&actual, Err(error) if fatal(&error.error)));
+    assert!(matches!(&actual, Err(error) if error.error.rejects() == Rejects::Document));
     match kind {
         "empty" => assert!(matches!(
             actual,
@@ -401,4 +401,18 @@ fn the_bundled_registry_is_written_back_as_it_was_read() {
         written(&Catalog::parse(BUNDLED_REGISTRY).unwrap().value),
         serde_json::to_string(&document).unwrap()
     );
+}
+
+#[rstest]
+fn a_bad_value_keeps_its_json_error_as_the_source_and_names_its_key_and_field() {
+    let parsed =
+        loaded(json!({"open/router": {"litellm_provider": "t", "input_cost_per_token": "free"}}));
+    let error = &parsed.errors[0];
+    let cause = litellm_error::find::<serde_json::Error>(error)
+        .expect("the JSON error is in the chain")
+        .to_string();
+    assert_eq!(report(error).matches(&cause).count(), 1);
+    assert!(!error.to_string().contains(&cause));
+    assert_eq!(error.key().as_deref(), Some("open/router"));
+    assert_eq!(error.field().as_deref(), Some("input_cost_per_token"));
 }

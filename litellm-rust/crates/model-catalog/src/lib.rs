@@ -23,7 +23,6 @@ pub use catalog::*;
 pub use error::*;
 pub use fallback::*;
 pub use layers::*;
-pub use lower::{fatal, rejects_row};
 pub use model::*;
 pub use model_info::*;
 pub use register::*;

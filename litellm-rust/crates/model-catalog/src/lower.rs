@@ -15,58 +15,6 @@ use crate::model::Model;
 use crate::vocabulary::Mode;
 use crate::wire::{EntryWire, FlatPrice, OffPeakBlock, TierRow, WebSearchBillingUnit};
 
-pub fn fatal(error: &Error) -> bool {
-    match error {
-        Error::Json(_) | Error::Empty | Error::BelowMinimum { .. } | Error::Shrunk { .. } => true,
-        Error::Invalid(_)
-        | Error::NotAnObject
-        | Error::UnknownBlockKey
-        | Error::MissingProvider
-        | Error::UnknownTimezone { .. }
-        | Error::AliasShadowsModel { .. }
-        | Error::AliasTaken { .. }
-        | Error::DuplicatePrice { .. }
-        | Error::SuffixInsideBlock { .. }
-        | Error::TierRange
-        | Error::TierReversed
-        | Error::TierGap { .. }
-        | Error::MixedTierBasis
-        | Error::NotPricedByResults
-        | Error::BandsFromTwoSources
-        | Error::NotAnOffPeakRate
-        | Error::NoOffPeakPrices
-        | Error::NoOffPeakHours
-        | Error::EmptyList
-        | Error::InvalidDate => false,
-    }
-}
-
-pub fn rejects_row(error: &Error) -> bool {
-    match error {
-        Error::MissingProvider => false,
-        Error::Json(_) | Error::Empty | Error::BelowMinimum { .. } | Error::Shrunk { .. } => false,
-        Error::NotAnObject
-        | Error::Invalid(_)
-        | Error::UnknownBlockKey
-        | Error::UnknownTimezone { .. }
-        | Error::AliasShadowsModel { .. }
-        | Error::AliasTaken { .. }
-        | Error::DuplicatePrice { .. }
-        | Error::SuffixInsideBlock { .. }
-        | Error::TierRange
-        | Error::TierReversed
-        | Error::TierGap { .. }
-        | Error::MixedTierBasis
-        | Error::NotPricedByResults
-        | Error::BandsFromTwoSources
-        | Error::NotAnOffPeakRate
-        | Error::NoOffPeakPrices
-        | Error::NoOffPeakHours
-        | Error::EmptyList
-        | Error::InvalidDate => true,
-    }
-}
-
 impl TryFrom<&EntryWire> for Prices {
     type Error = Vec<Located>;
 
@@ -179,7 +127,10 @@ impl TryFrom<EntryWire> for Model {
         let missing_provider = attributes
             .litellm_provider
             .is_none()
-            .then_some(Located::new("", Error::MissingProvider));
+            .then_some(Located::new(
+                pointer_for_key("litellm_provider"),
+                Error::MissingProvider,
+            ));
         match prices {
             Ok(prices) if problems.is_empty() && missing_provider.is_none() => Ok(Model {
                 attributes,
@@ -533,6 +484,7 @@ mod tests {
     use serde_json::{Value, json};
 
     use super::*;
+    use crate::error::Rejects;
 
     const TEXT_INPUT: Meter = Meter::Input(InputUnit::Token(TokenKind::Text));
 
@@ -549,67 +501,33 @@ mod tests {
         Prices::try_from(&wire(entry))
     }
 
-    fn variant_name(error: &Error) -> &'static str {
-        match error {
-            Error::Json(_) => "Json",
-            Error::Empty => "Empty",
-            Error::BelowMinimum { .. } => "BelowMinimum",
-            Error::Shrunk { .. } => "Shrunk",
-            Error::NotAnObject => "NotAnObject",
-            Error::Invalid(_) => "Invalid",
-            Error::UnknownBlockKey => "UnknownBlockKey",
-            Error::MissingProvider => "MissingProvider",
-            Error::UnknownTimezone { .. } => "UnknownTimezone",
-            Error::AliasShadowsModel { .. } => "AliasShadowsModel",
-            Error::AliasTaken { .. } => "AliasTaken",
-            Error::DuplicatePrice { .. } => "DuplicatePrice",
-            Error::SuffixInsideBlock { .. } => "SuffixInsideBlock",
-            Error::TierRange => "TierRange",
-            Error::TierReversed => "TierReversed",
-            Error::TierGap { .. } => "TierGap",
-            Error::MixedTierBasis => "MixedTierBasis",
-            Error::NotPricedByResults => "NotPricedByResults",
-            Error::BandsFromTwoSources => "BandsFromTwoSources",
-            Error::NotAnOffPeakRate => "NotAnOffPeakRate",
-            Error::NoOffPeakPrices => "NoOffPeakPrices",
-            Error::NoOffPeakHours => "NoOffPeakHours",
-            Error::EmptyList => "EmptyList",
-            Error::InvalidDate => "InvalidDate",
-        }
-    }
-
     #[rstest]
-    #[case::json(Error::Json(serde_json::from_str::<Value>("{").unwrap_err()), true, false)]
-    #[case::empty(Error::Empty, true, false)]
-    #[case::below_minimum(Error::BelowMinimum { actual: 1, minimum: 2 }, true, false)]
-    #[case::shrunk(Error::Shrunk { actual: 1, reference: 3, ratio: 0.5 }, true, false)]
-    #[case::not_an_object(Error::NotAnObject, false, true)]
-    #[case::invalid(Error::Invalid(serde_json::from_str::<Value>("x").unwrap_err()), false, true)]
-    #[case::unknown_block_key(Error::UnknownBlockKey, false, true)]
-    #[case::missing_provider(Error::MissingProvider, false, false)]
-    #[case::unknown_timezone(Error::UnknownTimezone { zone: "invalid".into() }, false, true)]
-    #[case::alias_shadows_model(Error::AliasShadowsModel { alias: "model".into() }, false, true)]
-    #[case::alias_taken(Error::AliasTaken { alias: "alias".into(), taken_by: "owner".into() }, false, true)]
-    #[case::duplicate_price(Error::DuplicatePrice { first: "a".into(), second: "b".into() }, false, true)]
-    #[case::suffix_inside_block(Error::SuffixInsideBlock { block: "tiered_pricing" }, false, true)]
-    #[case::tier_range(Error::TierRange, false, true)]
-    #[case::tier_reversed(Error::TierReversed, false, true)]
-    #[case::tier_gap(Error::TierGap { start: 1, expected: 0 }, false, true)]
-    #[case::mixed_tier_basis(Error::MixedTierBasis, false, true)]
-    #[case::not_priced_by_results(Error::NotPricedByResults, false, true)]
-    #[case::bands_from_two_sources(Error::BandsFromTwoSources, false, true)]
-    #[case::not_an_off_peak_rate(Error::NotAnOffPeakRate, false, true)]
-    #[case::no_off_peak_prices(Error::NoOffPeakPrices, false, true)]
-    #[case::no_off_peak_hours(Error::NoOffPeakHours, false, true)]
-    #[case::empty_list(Error::EmptyList, false, true)]
-    #[case::invalid_date(Error::InvalidDate, false, true)]
-    fn policy_classifies_each_error(
-        #[case] error: Error,
-        #[case] is_fatal: bool,
-        #[case] rejects: bool,
-    ) {
-        assert_eq!(fatal(&error), is_fatal);
-        assert_eq!(rejects_row(&error), rejects);
+    #[case::json(Error::Json(serde_json::from_str::<Value>("{").unwrap_err()), Rejects::Document)]
+    #[case::empty(Error::Empty, Rejects::Document)]
+    #[case::below_minimum(Error::BelowMinimum { actual: 1, minimum: 2 }, Rejects::Document)]
+    #[case::shrunk(Error::Shrunk { actual: 1, reference: 3, ratio: 0.5 }, Rejects::Document)]
+    #[case::not_an_object(Error::NotAnObject, Rejects::Row)]
+    #[case::invalid(Error::Invalid(serde_json::from_str::<Value>("x").unwrap_err()), Rejects::Row)]
+    #[case::unknown_block_key(Error::UnknownBlockKey, Rejects::Row)]
+    #[case::missing_provider(Error::MissingProvider, Rejects::Nothing)]
+    #[case::unknown_timezone(Error::UnknownTimezone { zone: "invalid".into() }, Rejects::Row)]
+    #[case::alias_shadows_model(Error::AliasShadowsModel { alias: "model".into() }, Rejects::Row)]
+    #[case::alias_taken(Error::AliasTaken { alias: "alias".into(), taken_by: "owner".into() }, Rejects::Row)]
+    #[case::duplicate_price(Error::DuplicatePrice { first: "a".into(), second: "b".into() }, Rejects::Row)]
+    #[case::suffix_inside_block(Error::SuffixInsideBlock { block: "tiered_pricing" }, Rejects::Row)]
+    #[case::tier_range(Error::TierRange, Rejects::Row)]
+    #[case::tier_reversed(Error::TierReversed, Rejects::Row)]
+    #[case::tier_gap(Error::TierGap { start: 1, expected: 0 }, Rejects::Row)]
+    #[case::mixed_tier_basis(Error::MixedTierBasis, Rejects::Row)]
+    #[case::not_priced_by_results(Error::NotPricedByResults, Rejects::Row)]
+    #[case::bands_from_two_sources(Error::BandsFromTwoSources, Rejects::Row)]
+    #[case::not_an_off_peak_rate(Error::NotAnOffPeakRate, Rejects::Row)]
+    #[case::no_off_peak_prices(Error::NoOffPeakPrices, Rejects::Row)]
+    #[case::no_off_peak_hours(Error::NoOffPeakHours, Rejects::Row)]
+    #[case::empty_list(Error::EmptyList, Rejects::Row)]
+    #[case::invalid_date(Error::InvalidDate, Rejects::Row)]
+    fn policy_classifies_each_error(#[case] error: Error, #[case] expected: Rejects) {
+        assert_eq!(error.rejects(), expected);
     }
 
     fn online(meter: Meter, tier: ServiceTier, band: Band) -> Price {
@@ -703,27 +621,27 @@ mod tests {
             "tiered_pricing": [{"range": [0, 10], "input_cost_per_token": 2e-6}]
         }),
         "/tiered_pricing/0/input_cost_per_token",
-        "DuplicatePrice"
+        "duplicate_price"
     )]
     #[case::zero_band_is_the_base_price(
         json!({"input_cost_per_token": 1e-6, "input_cost_per_token_above_0k_tokens": 2e-6}),
         "/input_cost_per_token_above_0k_tokens",
-        "DuplicatePrice"
+        "duplicate_price"
     )]
     #[case::tier_without_range(
         json!({"tiered_pricing": [{"input_cost_per_token": 1e-6}]}),
         "/tiered_pricing/0",
-        "TierRange"
+        "tier_range"
     )]
     #[case::tier_with_suffix(
         json!({"tiered_pricing": [{"range": [0, 10], "input_cost_per_token_priority": 1e-6}]}),
         "/tiered_pricing/0/input_cost_per_token_priority",
-        "SuffixInsideBlock"
+        "suffix_inside_block"
     )]
     #[case::reversed_range(
         json!({"tiered_pricing": [{"range": [0, 10], "input_cost_per_token": 1e-6}, {"range": [10, 5], "input_cost_per_token": 1e-6}]}),
         "/tiered_pricing/1",
-        "TierReversed"
+        "tier_reversed"
     )]
     #[case::gap_between_tiers(
         json!({"tiered_pricing": [
@@ -731,12 +649,12 @@ mod tests {
             {"range": [20, 30], "input_cost_per_token": 2e-6}
         ]}),
         "/tiered_pricing/1",
-        "TierGap"
+        "tier_gap"
     )]
     #[case::ladder_not_from_zero(
         json!({"tiered_pricing": [{"range": [5, 10], "input_cost_per_token": 1e-6}]}),
         "/tiered_pricing/0",
-        "TierGap"
+        "tier_gap"
     )]
     #[case::result_ladder_overlaps(
         json!({"tiered_pricing": [
@@ -744,7 +662,7 @@ mod tests {
             {"max_results_range": [10, 20], "input_cost_per_query": 2e-6}
         ]}),
         "/tiered_pricing/1",
-        "TierGap"
+        "tier_gap"
     )]
     #[case::mixed_basis(
         json!({"tiered_pricing": [
@@ -752,12 +670,12 @@ mod tests {
             {"max_results_range": [11, 20], "input_cost_per_query": 2e-6}
         ]}),
         "/tiered_pricing",
-        "MixedTierBasis"
+        "mixed_tier_basis"
     )]
     #[case::result_tier_prices_a_token(
         json!({"tiered_pricing": [{"max_results_range": [0, 10], "input_cost_per_token": 1e-6}]}),
         "/tiered_pricing/0/input_cost_per_token",
-        "NotPricedByResults"
+        "not_priced_by_results"
     )]
     #[case::two_band_sources(
         json!({
@@ -765,27 +683,27 @@ mod tests {
             "tiered_pricing": [{"range": [0, 10], "input_cost_per_token": 1e-6}]
         }),
         "/output_cost_per_token_above_200k_tokens",
-        "BandsFromTwoSources"
+        "bands_from_two_sources"
     )]
     #[case::off_peak_without_hours(
         json!({"off_peak_pricing": {"input_cost_per_token": 1e-6}}),
         "/off_peak_pricing",
-        "NoOffPeakHours"
+        "no_off_peak_hours"
     )]
     #[case::off_peak_without_prices(
         json!({"off_peak_pricing": {"hours_utc": "00:00-01:00"}}),
         "/off_peak_pricing",
-        "NoOffPeakPrices"
+        "no_off_peak_prices"
     )]
     #[case::off_peak_empty_windows(
         json!({"off_peak_pricing": {"windows": [], "input_cost_per_token": 1e-6}}),
         "/off_peak_pricing/windows",
-        "EmptyList"
+        "empty_list"
     )]
     #[case::off_peak_empty_hours(
         json!({"off_peak_pricing": {"hours_utc": [], "input_cost_per_token": 1e-6}}),
         "/off_peak_pricing/hours_utc",
-        "EmptyList"
+        "empty_list"
     )]
     #[case::off_peak_empty_weekdays(
         json!({"off_peak_pricing": {
@@ -793,17 +711,17 @@ mod tests {
             "input_cost_per_token": 1e-6
         }}),
         "/off_peak_pricing/windows/0/weekdays",
-        "EmptyList"
+        "empty_list"
     )]
     #[case::off_peak_image_price(
         json!({"off_peak_pricing": {"hours_utc": "00:00-01:00", "output_cost_per_image": 1}}),
         "/off_peak_pricing/output_cost_per_image",
-        "NotAnOffPeakRate"
+        "not_an_off_peak_rate"
     )]
     #[case::off_peak_band(
         json!({"off_peak_pricing": {"hours_utc": "00:00-01:00", "input_cost_per_token_above_200k_tokens": 1}}),
         "/off_peak_pricing/input_cost_per_token_above_200k_tokens",
-        "SuffixInsideBlock"
+        "suffix_inside_block"
     )]
     fn rules_across_keys_name_where_each_price_came_from(
         #[case] entry: Value,
@@ -813,7 +731,7 @@ mod tests {
         let problems = prices(entry).unwrap_err();
         assert!(
             problems.iter().any(|problem| problem.path == expected_path
-                && variant_name(&problem.error) == expected_variant),
+                && <&str>::from(problem.error.kind()) == expected_variant),
             "{problems:?}"
         );
     }
@@ -893,12 +811,12 @@ mod tests {
         let problems: Vec<String> = Model::from_fields(&fields)
             .unwrap_err()
             .iter()
-            .map(ToString::to_string)
+            .map(|problem| litellm_error::Report::new(problem).to_string())
             .collect();
 
         assert_eq!(problems.len(), 3, "{problems:?}");
-        assert!(problems[0].starts_with("mode: unknown variant `chatt`"));
-        assert_eq!(problems[1], "litellm_provider is required");
+        assert!(problems[0].starts_with("mode: invalid value: unknown variant `chatt`"));
+        assert_eq!(problems[1], "litellm_provider: required");
         assert_eq!(
             problems[2],
             "tiered_pricing[0]: a tier needs exactly one of range and max_results_range"

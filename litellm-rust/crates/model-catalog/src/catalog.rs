@@ -5,9 +5,8 @@ use indexmap::IndexMap;
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::error::{Error, Loaded, Located};
+use crate::error::{Error, Loaded, Located, Rejects};
 use crate::fallback::{FallbackGeneralizations, FallbackRule};
-use crate::lower::rejects_row;
 use crate::model::Model;
 use crate::store::{Rows, Store};
 use crate::wire::{EntryWire, Fields};
@@ -284,7 +283,7 @@ impl Catalog {
             .collect();
         let rejected: HashSet<String> = errors
             .iter()
-            .filter(|error| rejects_row(&error.error))
+            .filter(|error| error.error.rejects() == Rejects::Row)
             .filter_map(|error| crate::error::pointer_root(&error.path))
             .filter(|root| row_names.contains(root))
             .collect();

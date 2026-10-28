@@ -12,7 +12,7 @@
 
 `layers.rs`, `resolve/`, `model_info.rs` and `register.rs` hold types only. The functions over them land with their first caller
 
-Catalog errors use one `Error` enum with a `Located` JSON Pointer. Only `lower.rs` decides which errors are fatal and which reject a row
+Catalog errors use one `Error` enum with a `Located` JSON Pointer as its context, the `Error` being the `Located`'s source. `Error::rejects` alone decides whether an error fails the document, rejects its row or neither, and `ErrorKind` is the stable name hosts report it by
 
 ## Prices
 

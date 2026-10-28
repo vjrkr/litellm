@@ -1,16 +1,20 @@
-use std::fmt;
-
+use strum::{EnumDiscriminants, IntoStaticStr, VariantArray};
 use thiserror::Error;
 
-#[derive(Debug, Error)]
+#[derive(Debug, Error, EnumDiscriminants)]
+#[strum_discriminants(
+    name(ErrorKind),
+    derive(IntoStaticStr, VariantArray),
+    strum(serialize_all = "snake_case")
+)]
 pub enum Error {
-    #[error("invalid JSON: {0}")]
+    #[error("invalid JSON")]
     Json(#[source] serde_json::Error),
-    #[error("catalog has no models")]
+    #[error("has no models")]
     Empty,
-    #[error("catalog has {actual} models, below minimum {minimum}")]
+    #[error("has {actual} models, below minimum {minimum}")]
     BelowMinimum { actual: usize, minimum: usize },
-    #[error("catalog has {actual} models, below {ratio} of reference count {reference}")]
+    #[error("has {actual} models, below {ratio} of reference count {reference}")]
     Shrunk {
         actual: usize,
         reference: usize,
@@ -18,11 +22,11 @@ pub enum Error {
     },
     #[error("must be a JSON object")]
     NotAnObject,
-    #[error("{0}")]
+    #[error("invalid value")]
     Invalid(#[source] serde_json::Error),
     #[error("not a field this block reads")]
     UnknownBlockKey,
-    #[error("litellm_provider is required")]
+    #[error("required")]
     MissingProvider,
     #[error("{zone:?} is not an IANA time zone")]
     UnknownTimezone { zone: String },
@@ -58,9 +62,54 @@ pub enum Error {
     InvalidDate,
 }
 
-#[derive(Debug)]
+/// What a problem takes out of the served map
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Rejects {
+    Document,
+    Row,
+    Nothing,
+}
+
+impl Error {
+    pub fn kind(&self) -> ErrorKind {
+        ErrorKind::from(self)
+    }
+
+    pub fn rejects(&self) -> Rejects {
+        match self {
+            Self::Json(_) | Self::Empty | Self::BelowMinimum { .. } | Self::Shrunk { .. } => {
+                Rejects::Document
+            }
+            Self::NotAnObject
+            | Self::Invalid(_)
+            | Self::UnknownBlockKey
+            | Self::UnknownTimezone { .. }
+            | Self::AliasShadowsModel { .. }
+            | Self::AliasTaken { .. }
+            | Self::DuplicatePrice { .. }
+            | Self::SuffixInsideBlock { .. }
+            | Self::TierRange
+            | Self::TierReversed
+            | Self::TierGap { .. }
+            | Self::MixedTierBasis
+            | Self::NotPricedByResults
+            | Self::BandsFromTwoSources
+            | Self::NotAnOffPeakRate
+            | Self::NoOffPeakPrices
+            | Self::NoOffPeakHours
+            | Self::EmptyList
+            | Self::InvalidDate => Rejects::Row,
+            Self::MissingProvider => Rejects::Nothing,
+        }
+    }
+}
+
+/// An error at a JSON Pointer into the document, the empty pointer being the document itself
+#[derive(Debug, Error)]
+#[error("{}", display_path(path))]
 pub struct Located {
     pub path: String,
+    #[source]
     pub error: Error,
 }
 
@@ -86,6 +135,22 @@ impl Located {
         Self::new(path_to_pointer(path), error)
     }
 
+    /// The top-level key the error is under, `None` for the document itself
+    pub fn key(&self) -> Option<String> {
+        pointer_root(&self.path)
+    }
+
+    /// The path below the key, its segments joined by `/`
+    pub fn field(&self) -> Option<String> {
+        let segments: Vec<_> = self
+            .path
+            .split('/')
+            .skip(2)
+            .map(unescape_pointer_segment)
+            .collect();
+        (!segments.is_empty()).then(|| segments.join("/"))
+    }
+
     pub(crate) fn prepend(&mut self, key: &str) {
         let prefix = escape_pointer_segment(key);
         self.path = if self.path.is_empty() {
@@ -95,23 +160,6 @@ impl Located {
         };
     }
 }
-
-impl fmt::Display for Located {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if self.path.is_empty() {
-            return self.error.fmt(formatter);
-        }
-        let path = display_path(&self.path);
-        match &self.error {
-            Error::MissingProvider => write!(formatter, "{path}.litellm_provider is required"),
-            Error::NotAnObject => write!(formatter, "{path} must be a JSON object"),
-            Error::UnknownBlockKey => write!(formatter, "{path} is not a field this block reads"),
-            _ => write!(formatter, "{path}: {}", self.error),
-        }
-    }
-}
-
-impl std::error::Error for Located {}
 
 pub(crate) fn pointer_root(path: &str) -> Option<String> {
     path.strip_prefix('/')
@@ -172,6 +220,9 @@ fn path_to_pointer(key: &str) -> String {
 }
 
 fn display_path(path: &str) -> String {
+    if path.is_empty() {
+        return "catalog".to_owned();
+    }
     path.split('/')
         .skip(1)
         .map(unescape_pointer_segment)
