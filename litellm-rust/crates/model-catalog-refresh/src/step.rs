@@ -2,6 +2,7 @@ use std::time::Duration;
 
 use litellm_model_catalog::{Catalog, Located};
 
+use crate::error::Error;
 use crate::source::Source;
 
 /// One attempt. Where to fetch from is the `Source`, so the request carries no URL
@@ -11,7 +12,7 @@ pub struct FetchRequest {
     pub timeout: Duration,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub enum Reply {
     /// An HTTP, S3 or file answer. The body is read only on 200
     Response {
@@ -21,7 +22,7 @@ pub enum Reply {
         body: Option<Vec<u8>>,
     },
     /// No answer reached us
-    Transport { reason: String },
+    Failed(Error),
 }
 
 /// What the fetch state machine asks its driver to do next
@@ -37,7 +38,9 @@ pub enum Step {
     },
     /// 304, a final status, or retries exhausted
     Done {
-        reason: String,
+        error: Error,
+        /// The wait before the next attempt when the last failure was retryable, so a caller can retry later
+        retry_after: Option<Duration>,
     },
 }
 
