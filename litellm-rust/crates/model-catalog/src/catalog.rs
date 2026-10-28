@@ -374,9 +374,6 @@ impl Catalog {
                 let bundled_entry = bundled.entries.get(&key).cloned();
                 let replaced_by_bundled = bundled_entry.is_some();
                 if let Some(entry) = bundled_entry {
-                    catalog
-                        .lowercase_keys
-                        .insert(key.to_lowercase(), key.clone());
                     catalog.entries.insert(key.clone(), entry);
                 }
                 Rejection {
@@ -386,6 +383,7 @@ impl Catalog {
                 }
             })
             .collect();
+        catalog.names = name_index(&catalog.entries, &catalog.aliases);
         (catalog, rejections)
     }
 
@@ -520,7 +518,9 @@ mod tests {
                 .field("input_cost_per_token"),
             Some(&json!(1.0))
         );
+        assert_eq!(catalog.lookup("GPT-4O").unwrap().matched_key, "gpt-4o");
         assert!(catalog.lookup("acme/new").is_none());
+        assert!(catalog.lookup("ACME/NEW").is_none());
         assert!(catalog.lookup("kept").is_some());
     }
 
