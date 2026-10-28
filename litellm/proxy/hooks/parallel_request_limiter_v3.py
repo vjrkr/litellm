@@ -140,7 +140,7 @@ def _resolve_model_group_alias_via_proxy_router(model: str) -> str | None:
 
     if llm_router is None:
         return None
-    return resolve_model_group_alias(llm_router.model_group_alias, model)
+    return resolve_model_group_alias(llm_router.registry().aliases(), model)  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # registry().aliases() is the untyped model_group_alias dict
 
 
 def _resolve_ptu_team_ceiling_via_proxy_router(team_id: str, model_group: str) -> PTUTeamCeiling | None:
@@ -148,7 +148,7 @@ def _resolve_ptu_team_ceiling_via_proxy_router(team_id: str, model_group: str) -
 
     if llm_router is None:
         return None
-    ceiling: Final = llm_router.team_ptu_ceiling(team_id, model_group)
+    ceiling: Final = llm_router.health().team_ptu_ceiling(team_id, model_group)
     return ceiling if ceiling is not None and is_ptu_cost_attribution_enabled() else None
 
 
@@ -3490,7 +3490,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
         try:
             # Get all deployments for this model
-            model_list: Final = llm_router.get_model_list(model_name=model)
+            model_list: Final = llm_router.registry().deployments(model)
             if not model_list:
                 return False
 

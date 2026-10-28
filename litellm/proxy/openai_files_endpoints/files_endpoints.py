@@ -117,7 +117,7 @@ router: Final = APIRouter()
 
 
 def _names_a_litellm_executed_provider(llm_router: Router, candidate: str, team_id: str | None) -> bool:
-    credentials: Final = llm_router.get_deployment_credentials_with_provider(model_id=candidate, team_id=team_id)
+    credentials: Final = llm_router.registry().credentials(candidate, form="with_provider", team_id=team_id)
     return credentials is not None and litellm_executed_provider_of(credentials) is not None
 
 
@@ -218,7 +218,7 @@ def get_files_provider_config(
 
 
 def _deployment_provider(llm_router: Router, model_id: str, team_id: str | None) -> str | None:
-    credentials: Final = llm_router.get_deployment_credentials_with_provider(model_id=model_id, team_id=team_id)
+    credentials: Final = llm_router.registry().credentials(model_id, form="with_provider", team_id=team_id)
     return None if credentials is None else credentials.get("custom_llm_provider")
 
 
@@ -227,7 +227,7 @@ def _resolves_to_vertex_deployments_only(llm_router: Router | None, model_name: 
         return False
     return all(
         _deployment_provider(llm_router, str(deployment["model_info"]["id"]), team_id) == "vertex_ai"
-        for deployment in llm_router.get_model_list(model_name=model_name, team_id=team_id) or ()
+        for deployment in llm_router.registry().deployments(model_name, team_id=team_id) or ()
         if "id" in deployment.get("model_info", {})
     )
 

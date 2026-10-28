@@ -814,8 +814,8 @@ class TestNonAdminCannotPersistWifFieldsOnCredential:
         stored = CredentialItem(credential_name="existing", credential_values={"api_key": "sk-old"}, credential_info={})
         update_by_name = AsyncMock(return_value=None)
         router = MagicMock()
-        router.get_deployment.return_value = {"model_name": "claude-opus-5-5"}
-        router.get_deployment_credentials.return_value = {
+        router.registry.return_value.deployment.return_value = {"model_name": "claude-opus-5-5"}
+        router.registry.return_value.credentials.return_value = {
             "anthropic_keycloak_token_url": "https://keycloak.internal/token",
             "anthropic_keycloak_client_secret_ref": "os.environ/KEYCLOAK_CLIENT_SECRET",
         }
@@ -834,8 +834,8 @@ class TestNonAdminCannotPersistWifFieldsOnCredential:
         stored = CredentialItem(credential_name="existing", credential_values={"api_key": "sk-old"}, credential_info={})
         update_by_name = AsyncMock(return_value=None)
         router = MagicMock()
-        router.get_deployment.return_value = {"model_name": "claude-opus-5-5"}
-        router.get_deployment_credentials.return_value = {
+        router.registry.return_value.deployment.return_value = {"model_name": "claude-opus-5-5"}
+        router.registry.return_value.credentials.return_value = {
             "anthropic_keycloak_token_url": "https://keycloak.internal/token"
         }
         credential_store(find_by_name=AsyncMock(return_value=stored), update_by_name=update_by_name, llm_router=router)
@@ -1732,8 +1732,8 @@ def test_update_credential_resolves_credential_values_from_model_id_like_create(
     )
     update_by_name = AsyncMock(return_value=None)
     router = MagicMock()
-    router.get_deployment.return_value = {"model_name": "gpt-5.2"}
-    router.get_deployment_credentials.return_value = {"api_key": "sk-from-deployment"}
+    router.registry.return_value.deployment.return_value = {"model_name": "gpt-5.2"}
+    router.registry.return_value.credentials.return_value = {"api_key": "sk-from-deployment"}
     credential_store(find_by_name=AsyncMock(return_value=stored), update_by_name=update_by_name, llm_router=router)
 
     response = _patch_credential(
@@ -1742,7 +1742,7 @@ def test_update_credential_resolves_credential_values_from_model_id_like_create(
     )
 
     assert response.status_code == 200, response.text
-    router.get_deployment_credentials.assert_called_once_with("deployment-1")
+    router.registry.return_value.credentials.assert_called_once_with("deployment-1")
     written = json.loads(update_by_name.await_args.kwargs["data"]["credential_values"])
     assert set(written) == {"api_key"}
     assert written["api_key"] != "sk-old", "the deployment's values must replace the stored ones"
@@ -1755,7 +1755,7 @@ def test_update_credential_answers_404_when_model_id_names_no_deployment(credent
     )
     update_by_name = AsyncMock(return_value=None)
     router = MagicMock()
-    router.get_deployment.return_value = None
+    router.registry.return_value.deployment.return_value = None
     credential_store(find_by_name=AsyncMock(return_value=stored), update_by_name=update_by_name, llm_router=router)
 
     response = _patch_credential(

@@ -19,7 +19,7 @@ from litellm.proxy import utils as proxy_utils
 from litellm.proxy.utils import create_model_info_response
 from litellm.types.router import DeploymentModelListingInfo
 
-from .conftest import normalize  # type: ignore[import-not-found]
+from .conftest import normalize, route_entry_points_to_stubs  # type: ignore[import-not-found]
 
 
 def _stub_model_info_response(
@@ -49,6 +49,7 @@ def patched_models(monkeypatch):
     router.get_routable_upstream_model = MagicMock(return_value="gpt-4")
     router.get_configured_display_name = MagicMock(return_value=None)
     router.get_configured_service_tiers = MagicMock(return_value=())
+    route_entry_points_to_stubs(router)
 
     monkeypatch.setattr(proxy_server, "llm_router", router)
     monkeypatch.setattr(proxy_server, "prisma_client", MagicMock())

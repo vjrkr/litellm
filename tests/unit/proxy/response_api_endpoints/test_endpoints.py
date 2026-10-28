@@ -11,6 +11,8 @@ from collections.abc import Mapping
 from typing import Any, Final, Literal, cast
 from unittest.mock import AsyncMock, MagicMock, call, patch
 
+from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
+
 import httpx
 import pytest
 import respx
@@ -885,7 +887,7 @@ def _configured_deployment_router(fetched: ResponsesAPIResponse) -> MagicMock:
         )
     )
     router.aget_responses = AsyncMock(return_value=fetched)
-    return router
+    return route_entry_points_to_stubs(router)
 
 
 def _background_response(response_id: str, status: str, input_tokens: int) -> ResponsesAPIResponse:
@@ -3880,7 +3882,7 @@ class TestResolveCursorModelVariant:
 
 
 def _router_serving_only(base_model: str) -> MagicMock:
-    mock_router = MagicMock()
+    mock_router = route_entry_points_to_stubs(MagicMock())
     mock_router.model_names = set()
     mock_router.model_group_alias = {}
     mock_router.team_public_model_names = frozenset()
