@@ -60,6 +60,10 @@ pub enum Error {
     EmptyList,
     #[error("expected a calendar date YYYY-MM-DD")]
     InvalidDate,
+    #[error("not a field litellm reads")]
+    UnreadField,
+    #[error("has no rules")]
+    NoFallbackRules,
 }
 
 /// What a problem takes out of the served map
@@ -99,7 +103,7 @@ impl Error {
             | Self::NoOffPeakHours
             | Self::EmptyList
             | Self::InvalidDate => Rejects::Row,
-            Self::MissingProvider => Rejects::Nothing,
+            Self::MissingProvider | Self::UnreadField | Self::NoFallbackRules => Rejects::Nothing,
         }
     }
 }

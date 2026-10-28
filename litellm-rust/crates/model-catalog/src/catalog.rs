@@ -5,7 +5,7 @@ use indexmap::IndexMap;
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::error::{Error, Loaded, Located, Rejects};
+use crate::error::{Error, Loaded, Located, Rejects, pointer_child, pointer_for_key};
 use crate::fallback::{FallbackGeneralizations, FallbackRule};
 use crate::model::Model;
 use crate::store::{Rows, Store};
@@ -211,6 +211,32 @@ impl Catalog {
             },
             errors: problems,
         })
+    }
+
+    /// Everything a cost map change has to fix before it merges, which is stricter than what `parse` serves
+    pub fn problems(body: &[u8]) -> Vec<Located> {
+        let Loaded {
+            value: catalog,
+            errors,
+        } = match Self::parse(body) {
+            Ok(loaded) => loaded,
+            Err(fatal) => return vec![fatal],
+        };
+        let unread = catalog.unrecognized().map(|(model, key)| {
+            Located::new(
+                pointer_child(&pointer_for_key(model), key),
+                Error::UnreadField,
+            )
+        });
+        let no_fallback_rules = catalog
+            .fallback_rules()
+            .is_none_or(<[_]>::is_empty)
+            .then(|| Located::from_key(FALLBACK_GENERALIZATIONS, Error::NoFallbackRules));
+        errors
+            .into_iter()
+            .chain(unread)
+            .chain(no_fallback_rules)
+            .collect()
     }
 
     pub fn row_errors(model: &str, fields: &Fields) -> Vec<Located> {
